@@ -1,15 +1,16 @@
 use avie_core::board::{BoardState, Move, Promotion};
 use avie_core::{File, Rank};
-use nom::branch::alt;
-use nom::bytes::complete::tag;
-use nom::character::complete::{alpha1, multispace0, multispace1, one_of};
-use nom::combinator::opt;
-use nom::multi::separated_list0;
-use nom::sequence::{terminated, tuple};
-use nom::IResult;
-use std::sync::Arc;
+use nom::{
+    IResult,
+    branch::alt,
+    bytes::complete::tag,
+    character::complete::{alpha1, multispace0, multispace1, one_of},
+    combinator::opt,
+    multi::separated_list0,
+    sequence::{terminated, tuple},
+};
 use std::ops::DerefMut;
-use std::sync::atomic::Ordering;
+use std::sync::{atomic::Ordering, Arc};
 
 use crate::state::{EngineState, SearchState};
 
@@ -23,7 +24,7 @@ fn move_to_long_algebraic(mov: &Move) -> String {
         "c6", "b6", "a6", "h7", "g7", "f7", "e7", "d7", "c7", "b7", "a7", "h8", "g8", "f8", "e8",
         "d8", "c8", "b8", "a8",
     ];
-    let mut from = SQUARES[mov.from as usize].to_owned();
+    let from = SQUARES[mov.from as usize].to_owned();
     let to = SQUARES[mov.to as usize];
     let promotion = match mov.promotion {
         Promotion::None => "",
@@ -169,14 +170,23 @@ pub fn process_uci_command(commands: &str, engine_state: &mut EngineState) -> bo
                     engine_state.should_stop = Arc::new(false.into());
                     let state = engine_state.search_state.clone();
                     let should_stop = engine_state.should_stop.clone();
-                    engine_state.search_thread = Some(std::thread::spawn(move ||{
+                    engine_state.search_thread = Some(std::thread::spawn(move || {
                         if let Ok(mut state) = state.lock() {
                             let should_stop = should_stop.as_ref();
                             let search_state = state.deref_mut();
-                            let SearchState{move_array, board, transposition_table} = search_state;
-                            *move_array = [Move::new(0, 0, Promotion::None);218];
-                            let mut moves = board.generate_moves(move_array);
-                            avie_core::evaluate::choose_best_move(board, moves, transposition_table, should_stop)
+                            let SearchState {
+                                move_array,
+                                board,
+                                transposition_table,
+                            } = search_state;
+                            *move_array = [Move::new(0, 0, Promotion::None); 218];
+                            let moves = board.generate_moves(move_array);
+                            avie_core::evaluate::choose_best_move(
+                                board,
+                                moves,
+                                transposition_table,
+                                should_stop,
+                            )
                         } else {
                             todo!()
                         }
@@ -187,15 +197,15 @@ pub fn process_uci_command(commands: &str, engine_state: &mut EngineState) -> bo
                     let handle = std::mem::replace(&mut engine_state.search_thread, None);
                     if let Some(handle) = handle {
                         let result = handle.join();
-                        
+
                         match result {
                             Ok(Some((mov, score))) => {
                                 if engine_state.debug {
                                     println!("score {}", score as f64 / 100f64)
                                 };
                                 println!("bestmove {}", move_to_long_algebraic(&mov))
-                            },
-                            _ => println!("bestmove 0000")
+                            }
+                            _ => println!("bestmove 0000"),
                         }
                     };
                 }
