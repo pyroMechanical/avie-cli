@@ -6,7 +6,7 @@ pub struct EngineState {
     pub debug: bool,
     pub should_quit: bool,
     pub should_stop: Arc<std::sync::atomic::AtomicBool>,
-    pub search_thread: Option<JoinHandle<Option<(Move, i64)>>>
+    pub search_thread: Option<JoinHandle<()>>
 }
 
 pub struct SearchState {

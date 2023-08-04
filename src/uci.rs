@@ -11,7 +11,7 @@ use nom::{
 };
 use std::ops::DerefMut;
 use std::sync::{atomic::Ordering, Arc};
-
+use std::collections::HashSet;
 use crate::state::{EngineState, SearchState};
 
 static AVIE_VERSION: &str = "0.0.1";
@@ -43,10 +43,6 @@ fn introduction() {
 
 fn options() {
     //add options here as they come up
-}
-
-fn parse_error() {
-    todo!()
 }
 
 fn parse_long_algebraic(input: &str) -> IResult<&str, Move> {
@@ -98,13 +94,212 @@ fn accept_new_position<'a>(input: &'a str) -> IResult<&'a str, &'a str> {
     }
 }
 
+fn number_from_string(line: &str) -> Option<(u64, &str)> {
+    match nom::character::complete::u64::<&str, ()>(line) {
+        Ok((rest, value)) => {
+            Some((value, rest))
+        },
+        Err(_) => None,
+    }
+}
+
+///assumes that the time is in milliseconds, which is always true for uci times
+fn duration_from_string(line: &str) -> Option<(std::time::Duration, &str)> {
+    match nom::character::complete::u64::<&str, ()>(line) {
+        Ok((rest, millis)) => {
+            Some((std::time::Duration::from_millis(millis), rest))
+        },
+        Err(_) => None,
+    }
+}
+
+struct SearchArguments {
+    searchmoves: Vec<Move>,
+    ponder: bool,
+    wtime: std::time::Duration,
+    btime: std::time::Duration,
+    winc: std::time::Duration,
+    binc: std::time::Duration,
+    movestogo: u64,
+    depth: u64,
+    nodes: u64,
+    mate: u64,
+    movetime: std::time::Duration,
+    infinite: bool
+}
+
+///if multiple of the same arguments are sent, the last one is what will be used.
+fn get_search_arguments(mut line: &str) -> SearchArguments{
+    let mut searchmoves: Vec<Move> = vec![];
+    let mut ponder = false;
+    let mut wtime = std::time::Duration::from_millis(0);
+    let mut btime = std::time::Duration::from_millis(0);
+    let mut winc = std::time::Duration::from_millis(0);
+    let mut binc = std::time::Duration::from_millis(0);
+    let mut movestogo = 0;
+    let mut depth = 0;
+    let mut nodes = 0;
+    let mut mate = 0;
+    let mut movetime = std::time::Duration::from_millis(0);
+    let mut infinite = false;
+    
+    'args: loop {
+        match next_token(line) {
+            Err(_) => break 'args,
+            Ok((rest, token)) => {
+                line = rest;
+                match token {
+                    "searchmoves" => {
+                        match parse_moves(line) {
+                            Err(_) => (),
+                            Ok((rest, moves)) => {
+                                line = rest;
+                                searchmoves = moves;
+                            }
+                        }
+                    },
+                    "ponder" => ponder = true,
+                    "wtime" => {
+                        if let Some((duration, rest)) = duration_from_string(line){
+                            line = rest;
+                            wtime = duration;
+                        }
+                    }
+                    "btime" => {
+                        if let Some((duration, rest)) = duration_from_string(line){
+                            line = rest;
+                            btime = duration;
+                        }
+                    }
+                    "winc" => {
+                        if let Some((duration, rest)) = duration_from_string(line){
+                            line = rest;
+                            winc = duration;
+                        }
+                    }
+                    "binc" => {
+                        if let Some((duration, rest)) = duration_from_string(line){
+                            line = rest;
+                            binc = duration;
+                        }
+                    }
+                    "movestogo" => {
+                        if let Some((duration, rest)) = number_from_string(line){
+                            line = rest;
+                            movestogo = duration;
+                        }
+                    }
+                    "depth" => {
+                        if let Some((duration, rest)) = number_from_string(line){
+                            line = rest;
+                            depth = duration;
+                        }
+                    }
+                    "nodes" => {
+                        if let Some((duration, rest)) = number_from_string(line){
+                            line = rest;
+                            nodes = duration;
+                        }
+                    }
+                    "mate" => {
+                        if let Some((duration, rest)) = number_from_string(line){
+                            line = rest;
+                            mate = duration;
+                        }
+                    }
+                    "movetime" => {
+                        if let Some((duration, rest)) = duration_from_string(line){
+                            line = rest;
+                            movetime = duration;
+                        }
+                    }
+                    "infinite" => infinite = true,
+                    _ => ()
+                }
+            }
+        }
+    }
+
+    SearchArguments {
+        searchmoves,
+        ponder,
+        wtime,
+        btime,
+        winc,
+        binc,
+        movestogo,
+        depth,
+        nodes,
+        mate,
+        movetime,
+        infinite,
+    }
+}
+
+fn begin_search(engine_state: &mut EngineState, args: SearchArguments ) {
+    if engine_state.search_thread.is_some() {
+        return;
+    }
+    
+    engine_state.should_stop = Arc::new(false.into());
+    let state = engine_state.search_state.clone();
+    let should_stop = engine_state.should_stop.clone();
+    engine_state.search_thread = Some(std::thread::spawn(move || {
+        if let Ok(mut state) = state.lock() {
+            let stop = should_stop.as_ref();
+            let search_state = state.deref_mut();
+            let SearchState {
+                move_array,
+                board,
+                transposition_table,
+            } = search_state;
+            *move_array = [Move::new(0, 0, Promotion::None); 218];
+            let moves = board.generate_moves(move_array);
+            let moves = if !args.searchmoves.is_empty() {
+                let set1: HashSet<Move> = args.searchmoves.into_iter().collect();
+                let set2: HashSet<Move> = moves.iter().map(|x| *x).collect();
+                let intersection = set1.intersection(&set2);
+                let mut len = 0;
+                for (index, mov) in intersection.enumerate() {
+                    len = index;
+                    moves[index] = *mov;
+                }
+                moves.split_at_mut(len + 1).0
+            } else {
+                moves
+            };
+            let should_stop = should_stop.clone();
+            if !args.movetime.is_zero() && !(args.ponder || args.infinite) {
+                std::thread::spawn(move || {
+                    std::thread::sleep(args.movetime);
+                    should_stop.store(true, Ordering::Relaxed);
+                });
+            }
+            let result = avie_core::evaluate::choose_best_move(
+                board,
+                moves,
+                transposition_table,
+                stop,
+            );
+            if let Some((mov, _score)) = result {
+                println!("bestmove {}", move_to_long_algebraic(&mov))
+            }
+            else {
+                println!("bestmove 0000")
+            }
+        } else {
+            todo!()
+        }
+    }));
+}
+
 fn next_token<'a>(string: &'a str) -> IResult<&'a str, &'a str> {
     terminated(alpha1, multispace0)(string)
 }
 
-pub fn process_uci_command(commands: &str, engine_state: &mut EngineState) -> bool {
+pub fn process_uci_command(commands: &str, engine_state: &mut EngineState){
     match next_token(commands) {
-        Err(_) => parse_error(),
+        Err(_) => return,
         Ok((rest, string)) => {
             match string {
                 "uci" => {
@@ -119,7 +314,7 @@ pub fn process_uci_command(commands: &str, engine_state: &mut EngineState) -> bo
                     Ok((_, "off")) => {
                         engine_state.debug = false;
                     }
-                    _ => parse_error(),
+                    _ => return,
                 },
                 "isready" => {
                     println!("readyok");
@@ -136,7 +331,7 @@ pub fn process_uci_command(commands: &str, engine_state: &mut EngineState) -> bo
                                 Ok(state) => state,
                                 Err(e) => {
                                     println!("error: {:?}", e);
-                                    return false;
+                                    return;
                                 }
                             };
                             if let Ok(mut engine_state) = engine_state.search_state.try_lock() {
@@ -162,60 +357,22 @@ pub fn process_uci_command(commands: &str, engine_state: &mut EngineState) -> bo
                                 }
                             }
                         }
-                        Err(_) => parse_error(),
+                        Err(_) => return,
                     }
                 }
                 "go" => {
-                    //todo!() handle case where existing thread is running
-                    engine_state.should_stop = Arc::new(false.into());
-                    let state = engine_state.search_state.clone();
-                    let should_stop = engine_state.should_stop.clone();
-                    engine_state.search_thread = Some(std::thread::spawn(move || {
-                        if let Ok(mut state) = state.lock() {
-                            let should_stop = should_stop.as_ref();
-                            let search_state = state.deref_mut();
-                            let SearchState {
-                                move_array,
-                                board,
-                                transposition_table,
-                            } = search_state;
-                            *move_array = [Move::new(0, 0, Promotion::None); 218];
-                            let moves = board.generate_moves(move_array);
-                            avie_core::evaluate::choose_best_move(
-                                board,
-                                moves,
-                                transposition_table,
-                                should_stop,
-                            )
-                        } else {
-                            todo!()
-                        }
-                    }));
+                    begin_search(engine_state, get_search_arguments(rest));
                 }
                 "stop" => {
                     engine_state.should_stop.store(true, Ordering::Relaxed);
-                    let handle = std::mem::replace(&mut engine_state.search_thread, None);
-                    if let Some(handle) = handle {
-                        let result = handle.join();
-
-                        match result {
-                            Ok(Some((mov, score))) => {
-                                if engine_state.debug {
-                                    println!("score {}", score as f64 / 100f64)
-                                };
-                                println!("bestmove {}", move_to_long_algebraic(&mov))
-                            }
-                            _ => println!("bestmove 0000"),
-                        }
-                    };
                 }
                 "quit" => {
                     engine_state.should_stop.store(true, Ordering::Relaxed);
                     engine_state.should_quit = true;
                 }
-                _ => parse_error(),
+                "" => return,
+                _ => process_uci_command(rest, engine_state),
             }
         }
     }
-    false
 }
