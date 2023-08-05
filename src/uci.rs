@@ -1,4 +1,5 @@
 use avie_core::board::{BoardState, Move, Promotion};
+use avie_core::gamestate::Player;
 use avie_core::{File, Rank};
 use nom::{
     IResult,
@@ -7,7 +8,7 @@ use nom::{
     character::complete::{alpha1, multispace0, multispace1, one_of},
     combinator::opt,
     multi::separated_list0,
-    sequence::{terminated, tuple},
+    sequence::{terminated, tuple, delimited},
 };
 use std::ops::DerefMut;
 use std::sync::{atomic::Ordering, Arc};
@@ -237,11 +238,11 @@ fn get_search_arguments(mut line: &str) -> SearchArguments{
 }
 
 fn begin_search(engine_state: &mut EngineState, args: SearchArguments ) {
-    if engine_state.search_thread.is_some() {
-        return;
-    }
+    //if engine_state.search_thread.is_some() && !engine_state.should_stop.load(Ordering::Relaxed) {
+    //    return;
+    //}
     
-    engine_state.should_stop = Arc::new(false.into());
+    engine_state.should_stop.store(false, Ordering::Relaxed);
     let state = engine_state.search_state.clone();
     let should_stop = engine_state.should_stop.clone();
     engine_state.search_thread = Some(std::thread::spawn(move || {
@@ -254,7 +255,7 @@ fn begin_search(engine_state: &mut EngineState, args: SearchArguments ) {
                 transposition_table,
             } = search_state;
             *move_array = [Move::new(0, 0, Promotion::None); 218];
-            let moves = board.generate_moves(move_array);
+            let moves = board.generate_moves(move_array, false);
             let moves = if !args.searchmoves.is_empty() {
                 let set1: HashSet<Move> = args.searchmoves.into_iter().collect();
                 let set2: HashSet<Move> = moves.iter().map(|x| *x).collect();
@@ -272,6 +273,18 @@ fn begin_search(engine_state: &mut EngineState, args: SearchArguments ) {
             if !args.movetime.is_zero() && !(args.ponder || args.infinite) {
                 std::thread::spawn(move || {
                     std::thread::sleep(args.movetime);
+                    should_stop.store(true, Ordering::Relaxed);
+                });
+            }
+            else if !args.wtime.is_zero() && !args.btime.is_zero() && !(args.ponder || args.infinite) {
+                let player = board.active_player;
+                let (time, inc) = match player {
+                    Player::Black => (args.btime, args.binc),
+                    Player::White => (args.wtime, args.winc),
+                };
+                let movetime = inc + time.div_f64(60.0);
+                std::thread::spawn(move || {
+                    std::thread::sleep(movetime);
                     should_stop.store(true, Ordering::Relaxed);
                 });
             }
@@ -294,7 +307,7 @@ fn begin_search(engine_state: &mut EngineState, args: SearchArguments ) {
 }
 
 fn next_token<'a>(string: &'a str) -> IResult<&'a str, &'a str> {
-    terminated(alpha1, multispace0)(string)
+    delimited(multispace0, alpha1, multispace0)(string)
 }
 
 pub fn process_uci_command(commands: &str, engine_state: &mut EngineState){
@@ -334,22 +347,20 @@ pub fn process_uci_command(commands: &str, engine_state: &mut EngineState){
                                     return;
                                 }
                             };
-                            if let Ok(mut engine_state) = engine_state.search_state.try_lock() {
+                            if let Ok(mut engine_state) = engine_state.search_state.lock() {
                                 engine_state.board = BoardState::new(state);
                                 match next_token(rest) {
                                     Ok((rest, token)) => match token {
                                         "moves" => {
-                                            println!("{}", rest);
                                             let move_list = parse_moves(rest);
                                             match move_list {
-                                                Err(e) => println!("error: {:#?}", e),
+                                                Err(_) => (),
                                                 Ok(move_list) => {
                                                     for m in move_list.1 {
                                                         engine_state.board.make_move(m);
                                                     }
                                                 }
                                             }
-                                            println!("{:#?}", engine_state.board);
                                         }
                                         _ => (),
                                     },

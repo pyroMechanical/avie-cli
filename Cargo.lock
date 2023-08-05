@@ -13,7 +13,7 @@ dependencies = [
 [[package]]
 name = "avie-core"
 version = "0.1.0"
-source = "git+https://github.com/rubyr/avie-core.git?branch=evaluation#6bb452ce32c28a0a2886be12b736bee7e0b57d60"
+source = "git+https://github.com/rubyr/avie-core.git?branch=evaluation#71d5fbace45c6e18de2dd712a4625691d9ba8072"
 dependencies = [
  "lazy_static",
  "nom",
