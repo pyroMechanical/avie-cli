@@ -68,8 +68,8 @@ fn parse_long_algebraic(input: &str) -> IResult<&str, Move> {
             _ => Promotion::None,
         },
     };
-    let from: u8 = from_file.to_u8() + from_rank.to_u8() * 8;
-    let to: u8 = to_file.to_u8() + to_rank.to_u8() * 8;
+    let from: u8 = (7 - from_file.to_u8()) + from_rank.to_u8() * 8;
+    let to: u8 = (7 - to_file.to_u8()) + to_rank.to_u8() * 8;
     Ok((
         rest,
         Move {
